@@ -3,19 +3,17 @@ shiny_epoch_utils.py
 --------------
 Shared helper for splitting MNE epochs into named conditions.
 
-Used by all four metric functions (LZ78, PE, wSMI, PSD) so condition-handling logic lives in one place.
+Used across all four metrics so condition-handling.
 
-The condition model
---------------------
 A "condition spec" is an ordered dict mapping a condition name to a list
 of trigger-code strings:
 
     {'social': ['910'], 'nonsocial': ['911']}
     {'congruent': ['10', '11'], 'incongruent': ['20', '21']}   # pooled codes
 
-The special case of resting / no-condition data is represented by an
-empty spec ({} or None). In that case every epoch is returned under a
-single condition whose name is given by `resting_label` (default 'all').
+Resting data (or other data without conditions) is represented by an
+empty spec ({} or None). In that case, every epoch is returned under a
+single condition whose name is defined by `resting_label` (default 'all').
 """
 
 import mne
@@ -29,22 +27,19 @@ def split_epochs_by_condition(epochs, condition_spec, resting_label="all"):
     epochs : mne.Epochs
         The loaded epochs object.
     condition_spec : dict | None
-        Mapping {condition_name: [trigger_code_str, ...]}. If empty or None,
-        all epochs are returned as a single condition named `resting_label`.
+        Mapping {condition_name: [trigger_code_str, ...]} (see above). If empty/None,
+        all epochs returned as a single condition named `resting_label`.
     resting_label : str
         Name to use for the single condition when condition_spec is empty.
 
     Returns
     -------
     list of (str, np.ndarray)
-        One tuple per condition that actually had epochs present. The array
-        has shape (n_epochs, n_channels, n_times). Conditions with no
-        matching epochs are skipped (and a message is printed), mirroring
-        the original behaviour.
+        One tuple per condition that had any epochs. The array
+        has shape (n_epochs, n_channels, n_times). Skips conditions with
+        no epochs and prints alert message for those.
 
-        Returns an EMPTY list if no epochs were found at all — callers
-        should treat that the same way they treated "both conditions
-        missing" before (i.e. return None / skip participant).
+        Returns empty list if no epochs were found at all.
     """
     # ── Resting / no-condition case ─────────────────────────────────────────
     if not condition_spec:
@@ -58,8 +53,7 @@ def split_epochs_by_condition(epochs, condition_spec, resting_label="all"):
     # ── Task case: one entry per named condition ────────────────────────────
     out = []
     for cond_name, codes in condition_spec.items():
-        # MNE accepts a list of strings to pool multiple codes; a single
-        # code can be passed as a 1-element list too.
+        # MNE accepts a list of strings to pool multiple codes
         code_list = [str(c).strip() for c in codes if str(c).strip()]
         if not code_list:
             print(f"Condition '{cond_name}' has no trigger codes, skipping")
