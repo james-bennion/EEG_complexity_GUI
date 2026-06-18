@@ -10,11 +10,9 @@ from shiny_epoch_utils import split_epochs_by_condition
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-#n_jobs = -1
-
 def compute_permutation_entropy(signal, m, tau):
     """
-    Computes the normalized permutation entropy of a 1D signal.
+    Computes normalized permutation entropy of a 1D signal.
 
     Parameters:
     - signal: 1D numpy array
@@ -50,13 +48,13 @@ def compute_permutation_entropy(signal, m, tau):
     # Look up each ordinal pattern in dict (each row of ranked is one pattern, e.g. (1, 0, 2)
     sym_ids = np.array([lookup[tuple(row)] for row in ranked], dtype=np.int32)
 
-    # Count occurences of each pattern and normalise to probabilities
+    # Count occurrences of each pattern and normalise to probabilities
     c = np.bincount(sym_ids, minlength=n_perms).astype(np.float64)
     c /= c.sum()
 
     # Compute permutation entropy
     pe = -np.nansum(c * np.log(c))
-    # Normalize PE (1 = highly random, 0 = highly regular)
+    # Normalize PE
     pe /= np.log(possible_permutations)
     return pe
 
@@ -64,14 +62,13 @@ def compute_permutation_entropy(signal, m, tau):
 def process_permutation_entropy(processed_set_path, channel_labels, kernel, tau,
                                 condition_spec=None):
     """
-    Processes an EEG '.set' file to compute Permutation Entropy (PE) metrics,
-    split by user-defined conditions.
+    Processes an EEG '.set' file to compute PE, split by user-defined conditions.
 
     Parameters:
     - processed_set_path (str): Path to the processed '.set' EEG file.
     - channel_labels (list): Channel name strings.
-    - kernel (int): The number of samples to use to transform to a symbol.
-    - tau (int): The number of samples left between the ones that define a symbol.
+    - kernel (int): Number of samples (points) in a symbol.
+    - tau (int): Number of samples in gap between points in a symbol.
     - condition_spec (dict | None): {condition_name: [trigger_code_str, ...]}.
       If None/empty, all epochs are processed as a single condition ('all').
 
