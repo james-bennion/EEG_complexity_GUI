@@ -25,6 +25,9 @@ def _get_weights_matrix(nsym):
 
 
 def _define_symbols(kernel):
+    """
+    Auxiliary function to define the possible symbols for a given kernel
+    """
     result_dict = dict()
     total_symbols = math.factorial(kernel)
     cursymbol = 0
@@ -46,10 +49,11 @@ def _symb_python(data, kernel, tau):
     """
     Compute symbolic transform (vectorised).
 
-    Replaces the original window-by-window loop with a single array
-    indexing operation, then uses a pre-built lookup table instead of
-    repeated symbols.index() calls. The count step uses np.bincount
-    directly rather than apply_along_axis.
+    For each channel and trial, sliding window of length 'kernel' moves across time axis
+    with gap/lag 'tau', producing sequence of ordinal patterns.
+    These are mapped to a symbol index via a prebuilt lookup table.
+    Symbol counts are normalised by number of windows to give the probability distribution of
+    symbols.
 
     """
     symbols = _define_symbols(kernel)
@@ -57,26 +61,26 @@ def _symb_python(data, kernel, tau):
     nchannels, nsamples, ntrials = data.shape
     n_windows = nsamples - tau * (kernel - 1)
 
-    # Pre-build lookup: ordinal pattern tuple -> symbol index
-    # Avoids repeated string construction and list.index() calls
+    # Pre-build lookup table: ordinal pattern tuple -> symbol index
     lookup = {tuple(int(c) for c in s): i for i, s in enumerate(symbols)}
 
     # Build all window sample indices at once: shape (n_windows, kernel)
     window_idx = np.array([[k + j * tau for j in range(kernel)]
                            for k in range(n_windows)])
 
-    # Extract all windows simultaneously
+    # Extract all windows simultaneously using indices just created
     # data[:, window_idx, :] shape: (nchannels, n_windows, kernel, ntrials)
     windowed = data[:, window_idx, :]
 
-    # Argsort along kernel axis to get ordinal patterns
+    # Argsort along kernel axis (i.e., within each kernel) to get ordinal patterns
     # shape: (nchannels, n_windows, kernel, ntrials)
     ranked = np.argsort(windowed, axis=2)
 
-    # Vectorise the symbol lookup by reshaping to (-1, kernel),
+    # Vectorised the symbol lookup by reshaping to (-1, kernel),
     # mapping each row through the lookup table, then reshaping back.
     # Transpose to (nchannels, ntrials, n_windows, kernel) first so that
     # after flattening the first three dims, each row is one (ch, tr, win).
+    # I.e. each row is one kernel/symbol
     ranked_T = ranked.transpose(0, 3, 1, 2)          # (nch, ntr, n_win, kernel)
     flat = ranked_T.reshape(-1, kernel)
     sym_ids = np.array([lookup[tuple(row)] for row in flat], dtype=np.int32)
@@ -96,16 +100,16 @@ def _symb_python(data, kernel, tau):
 
 def _wsmi_python(data, count, wts):
     """
-    Compute wSMI (vectorised inner loops).
+    Compute wSMI between all channel pairs (vectorised).
 
-    Replaces the original four nested Python loops with:
-      - np.bincount on a flattened index to build the joint probability
-        matrix pxy in one pass (eliminates the sample loop)
-      - np.outer for the marginal probability product (eliminates sc1/sc2 loops)
-      - Boolean masking + vectorised log/multiply to compute MI contributions
+    For each trial and unique channel pair, calculates wSMI between their ordinal pattern sequences.
+    Computes joint probability distribution of symbol pairs by encoding each pair as an index.
+    This creates a 1D array where each number corresponds to a unique symbol pairing, allowing you
+    to count this in one pass, rather than with a loop.
+    Then mutual information is calculated, summed over all symbol pairs, and normalised.
+    This is then multipled by the weights matrix created above.
+    Only the upper triangle is calculated, to avoid calculating redundant pairs.
 
-    Outputs are numerically identical to the original (differences < 1e-15
-    are floating-point rounding only).
     """
     nchannels, nsamples, ntrials = data.shape
     nsymbols = count.shape[1]
@@ -118,7 +122,7 @@ def _wsmi_python(data, count, wts):
 
                 # ── Joint probability matrix ───────────────────────────────
                 # Encode 2D symbol pair (s1, s2) as a single integer
-                # s1 * nsymbols + s2, then count occurrences in one C-level pass.
+                # s1 * nsymbols + s2, then count occurrences in one pass.
                 flat_idx = (data[channel1, :, trial].astype(np.int32) * nsymbols +
                             data[channel2, :, trial].astype(np.int32))
                 pxy = (np.bincount(flat_idx, minlength=nsymbols ** 2)
@@ -131,7 +135,7 @@ def _wsmi_python(data, count, wts):
                 marginals = np.outer(count[channel1, :, trial],
                                      count[channel2, :, trial])
 
-                # ── MI contributions ───────────────────────────────────────
+                # ── Mutual Information ───────────────────────────────────────
                 # Only compute where pxy > 0 to avoid log(0)
                 mask = pxy > 0
                 aux = np.zeros((nsymbols, nsymbols))

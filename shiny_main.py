@@ -13,6 +13,8 @@ Simple way to run:
  - Second, double-click the "Start App.bat" file and follow instructions
 
 To run directly:
+    Change to the directory of the shiny folder.
+        cd <path to your shiny>
     In the terminal, run by typing:
         shiny run --reload shiny_main.py
     or:
@@ -38,13 +40,12 @@ IMPORT_ERROR = None
 try:
     import mne
     from shiny_LZC import process_LZ78
-    from vectorised_PE import process_permutation_entropy
-    from vectorised_wsmi import process_wsmi
-    from shiny_PSD_multitaper import process_psd
+    from shiny_vectorised_PE import process_permutation_entropy
+    from shiny_vectorised_wsmi import process_wsmi
+    from shiny_combined_PSD import process_psd
     from shiny_epoch_utils import count_epochs_by_condition
 except Exception as e:
     IMPORT_ERROR = f"{type(e).__name__}: {e}"
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Defaults
@@ -75,9 +76,11 @@ def parse_int_list(text):
             out.append(int(part))
     return out
 
+
 def parse_str_list(text):
     """'P7, P4, Cz' -> ['P7','P4','Cz']."""
     return [p.strip() for p in str(text).split(",") if p.strip()]
+
 
 def parse_condition_spec(text):
     """
@@ -110,6 +113,19 @@ def parse_condition_spec(text):
         spec[name] = codes
     return spec
 
+def parse_region_spec(text):
+    """'Frontal: Fz, F3, F4' -> {'Frontal': ['Fz','F3','F4']}. Same format as conditions."""
+    spec = {}
+    for raw in str(text).splitlines():
+        line = raw.strip()
+        if not line or ":" not in line:
+            continue
+        name, chans = line.split(":", 1)
+        name = name.strip()
+        chans = [c.strip() for c in chans.split(",") if c.strip()]
+        if name and chans:
+            spec[name] = chans
+    return spec
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UI
@@ -201,15 +217,27 @@ app_ui = ui.page_sidebar(
             ),
             ui.accordion_panel(
                 "PSD",
-                ui.input_select(
-                    "psd_band_power_method", "Band power method",
-                    {"fooof_peaks": "FOOOF Peaks", "psd_integration": "PSD Integration"},
-                    selected="fooof_peaks",
+                ui.input_checkbox_group(
+                    "psd_levels", "Spatial Level(s)",
+                    {"channel": "Per channel", "region": "Per region", "global": "Global (all channels)"},
+                    selected=["channel"],
                 ),
-                ui.input_checkbox("psd_normalize_total_power", "Normalize total power?", True),
+                ui.input_checkbox_group(
+                    "psd_methods", "Band-power Metric(s)",
+                    {"fooof_peaks": "FOOOF Peaks", "psd_integration": "PSD Integration",
+                     "aap": "Aperiodic-Adjusted Power"},
+                    selected=["fooof_peaks"],
+                ),
+                ui.input_checkbox("psd_normalize_total_power", "Normalize total power? (Doesn't apply to AAP)", True),
+                ui.panel_conditional(
+                    "input.psd_levels.includes('region')",
+                    ui.input_text_area(
+                        "psd_regions", "Regions (one per line, e.g.: name: ch1, ch2)",
+                        "Frontal: Fz, F3, F4, AF7, AF8, Fpz\nCentral: Cz, C3, C4\nTemporal: T7, T8\nParietal: Pz, P3, P4, P7, P8\nOccipital: Oz, PO7, PO8",
+                        rows=5,
+                    ),
+                ),
             ),
-            open=["Paths", "Pipelines to run", "Data type & conditions"],
-            multiple=True,
         ),
 
         ui.hr(),
@@ -252,11 +280,10 @@ app_ui = ui.page_sidebar(
 # Server
 # ─────────────────────────────────────────────────────────────────────────────
 def server(input, output, session):
-
     # Reactive state
-    log_lines = reactive.value([])           # list[str]
-    files = reactive.value([])               # list[str] of paths
-    status = reactive.value("Idle")          # "Idle" | "Running" | "Done" | "Stopped" | "Error"
+    log_lines = reactive.value([])  # list[str]
+    files = reactive.value([])  # list[str] of paths
+    status = reactive.value("Idle")  # "Idle" | "Running" | "Done" | "Stopped" | "Error"
     n_processed = reactive.value(0)
 
     # Thread coordination (plain objects, not reactive)
@@ -309,22 +336,22 @@ def server(input, output, session):
               For PSD, we calculate the aperiodic components (offset & exponent) and periodic power components.
 
             You can find more about these specific measures online.
-            
+
             If you want to look under the hood at how any measures are calculated, you can find the scripts in the same folder as this app.
 
             **Layout**
             - **Sidebar (left):** configuration options for setting up and running the pipeline.
             - **Top of page:** general progress monitors (files found, files processed, status).
             - **Bottom of page:** detailed progress log.
-            
+
             **Input Files**
             Prior to running the pipelines in this app, you will need to have preprocessed your data.
             There are various options for preprocessing depending on your specific requirements.
             The only thing required for this pipeline is that the input files are .set files.
             These should also automatically come with a .fdt file.
-            
+
             Where possible, put your files in participant subfolders in the data folder, i.e. datafolder\participant1, participant2, etc.
-            
+
             There are 2 options in the Setup section regarding input files.
             - Filename suffix - if all your preprocessed files have a suffix, e.g. "file1_processed_data.set" this will remove "_processed_data" so the final spreadsheets have neat participant IDs
             - Skip pattern - if some file names contain clues to skip them, e.g. "file1_no_usable_data.set", it will skip these files 
@@ -362,12 +389,12 @@ def server(input, output, session):
             - **Task data** — data split into conditions defined by trigger codes in the EEG.
               If you have multiple triggers for one condition, list them together on the same line.
               Enter one condition per line in the format:
-            
+
             ```
               condition1: trigger1, trigger2
               condition2: trigger3, trigger4
             ```
-              
+
             - **Resting state** — data with no conditions. All epochs are processed together
             under a single label (default: `all`).
 
@@ -377,7 +404,7 @@ def server(input, output, session):
 
             Enter a comma-separated list of your channel labels in order, e.g.:
             'P7, P4, Cz, Pz, etc'
-            
+
             ---
 
             #### Permutation Entropy
@@ -387,26 +414,36 @@ def server(input, output, session):
             - **Taus** — time lag between data points within a symbol (unit: samples).
               Multiple values can be entered as a comma-separated list; each is run separately.
               E.g. `kernel=3, tau=2` gives symbols of 3 data points each 2 samples apart.
-            
+
             ---
 
             #### wSMI
-            
+
             Kernel and tau parameters have the same meaning as for Permutation Entropy above.
-            
+
             - **Bypass CSD** — CSD = Current Source Density, a spatial filter that can sharpen signal at each electrode, but may not be appropriate for low channel data. 
-            
+
             ---
-            
+
             #### Power Spectral Density
+            
+            - **Spatial Levels**
+              - You can set at which spatial level you want the FOOOF to be fit.
+              - I.e., if you select "per channel", FOOOF will be fit per channel.
+              - If you select "global", it will be fit on all channels.
+              - Then the measures are calculated from that FOOOF fit.
             
             - **Band Power Method**
               - *FOOOF Peaks* — fits peaks to the aperiodic-corrected spectrum, isolating
                 oscillatory activity from the 1/f background.
               - *PSD Integration* — integrates the raw power spectrum within each frequency
                 band directly, without separating oscillatory from aperiodic activity.
+              - *Aperiodic-Adjusted Power (AAP)* — rather than fitting peaks, just subtracts the FOOOF
+                fit from the overall power spectrum, isolating oscilatory activity.
+                 
             - **Normalise Total Power** — divides each band power value by total power across
-              the spectrum, giving a value between 0 and 1.
+              the spectrum, giving a value between 0 and 1. This doesn't apply to AAP as this 
+              is already normalised by the subtraction in log space (equivalent to division).
             """),
             title="EEG Complexity Pipeline App - User Guide",
             easy_close=True,
@@ -499,8 +536,10 @@ def server(input, output, session):
                 "wsmi_kernel": int(input.wsmi_kernel()),
                 "wsmi_taus": parse_int_list(input.wsmi_taus()),
                 "wsmi_bypass_csd": input.wsmi_bypass_csd(),
-                "psd_band_power_method": input.psd_band_power_method(),
+                "psd_levels": list(input.psd_levels()),
+                "psd_methods": list(input.psd_methods()),
                 "psd_normalize_total_power": input.psd_normalize_total_power(),
+                "psd_region_spec": parse_region_spec(input.psd_regions()) if "region" in input.psd_levels() else None,
             }
         except ValueError as e:
             emit(f"✗ Bad parameter value: {e}")
@@ -610,11 +649,13 @@ def server(input, output, session):
 # Runs in a background thread.
 # ─────────────────────────────────────────────────────────────────────────────
 def run_pipeline(cfg, set_files, emit, stop_flag, report_progress):
-    all_lz, all_pe, all_wsmi, all_psd = [], [], [], []
+    all_lz, all_pe, all_wsmi, all_psd = [], [], [], {}
     tracker_rows = []
 
     output_path = cfg["output_path"]
     tracker_path = cfg["tracker_path"]
+    if not tracker_path.endswith(".csv"):
+        tracker_path = tracker_path + ".csv"
     condition_spec = cfg["condition_spec"]
     resting_label = cfg["resting_label"]
 
@@ -808,18 +849,20 @@ def run_pipeline(cfg, set_files, emit, stop_flag, report_progress):
                 try:
                     psd_results = process_psd(
                         processed_set_path=file_path,
-                        band_power_method=cfg["psd_band_power_method"],
+                        spatial_levels=cfg["psd_levels"],
+                        band_power_methods=cfg["psd_methods"],
                         normalize_total_power=cfg["psd_normalize_total_power"],
+                        region_spec=cfg["psd_region_spec"],
                         plot_fooof=False,
                         condition_spec=condition_spec,
                     )
                     if psd_results is not None:
-                        df = psd_results["measures"].copy()
-                        df["participant_id"] = ppt_id
-                        df["metric"] = "PSD"
-                        all_psd.append(df)
+                        for metric, df in psd_results.items():
+                            df = df.copy()
+                            df["participant_id"] = ppt_id
+                            all_psd.setdefault(metric, []).append(df)
                         tracker["psd_status"] = "success"
-                        emit("     PSD ✓")
+                        emit(f"     PSD ✓ ({', '.join(psd_results.keys())})")
                     else:
                         tracker["psd_status"] = "failed"
                         emit("     PSD returned None")
@@ -847,16 +890,6 @@ def run_pipeline(cfg, set_files, emit, stop_flag, report_progress):
         emit("=" * 50)
         emit("Saving results...")
 
-        try:
-            xlsx_path = tracker_path.replace(".csv", ".xlsx")
-            with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
-                if tracker_rows:
-                    pd.DataFrame(tracker_rows).to_excel(
-                        writer, sheet_name="tracker", index=False)
-            emit(f"  Saved tracker xlsx: {xlsx_path}")
-        except Exception as e:  # noqa: BLE001
-            emit(f"  ⚠ Could not write tracker xlsx: {e}")
-
         if all_lz:
             pd.concat(all_lz, ignore_index=True).to_csv(
                 output_path + "_LZ.csv", index=False)
@@ -869,10 +902,11 @@ def run_pipeline(cfg, set_files, emit, stop_flag, report_progress):
             pd.concat(all_wsmi, ignore_index=True).to_csv(
                 output_path + "_wSMI.csv", index=False)
             emit(f"  Saved {output_path}_wSMI.csv")
-        if all_psd:
-            pd.concat(all_psd, ignore_index=True).to_csv(
-                output_path + "_PSD.csv", index=False)
-            emit(f"  Saved {output_path}_PSD.csv")
+        for metric, frames in all_psd.items():
+            if frames:
+                pd.concat(frames, ignore_index=True).to_csv(
+                    output_path + f"_PSD_{metric}.csv", index=False)
+                emit(f"  Saved {output_path}_PSD_{metric}.csv")
 
         if stop_flag["stop"]:
             emit("■ Pipeline stopped by user.")

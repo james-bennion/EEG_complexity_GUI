@@ -9,11 +9,10 @@ from shiny_epoch_utils import split_epochs_by_condition
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-#n_jobs = -1
 
 def LZ78(X):
     """
-    Compute LZ78 complexity of univariate time signal X using standard
+    Compute Lempel-Ziv complexity of univariate time signal X using standard
     word-dictionary algorithm.
 
     Inputs:
@@ -47,10 +46,9 @@ def process_LZ78(processed_set_path, channel_labels, condition_spec=None):
 
     Parameters:
     - processed_set_path (str): Path to the processed '.set' EEG file.
-    - channel_labels (list): List of channel name strings (e.g., ['P7', 'P4', ...])
+    - channel_labels (list): List of channel name strings
     - condition_spec (dict | None): {condition_name: [trigger_code_str, ...]}.
-      If None/empty, all epochs are processed as a single condition ('all'),
-      which is the resting-state case.
+      If None/empty, all epochs are processed as a single condition ('all').
 
     Returns:
     - dict: Maps condition name -> {'lz_c': DataFrame}. Returns None if no
