@@ -127,6 +127,41 @@ def parse_region_spec(text):
             spec[name] = chans
     return spec
 
+def parse_band_spec(text):
+    """'Delta: 1, 4\\nTheta: 4, 8' -> {'Delta': [1, 4], 'Theta': [4, 8]}."""
+    spec = {}
+    for raw in str(text).splitlines():
+        line = raw.strip()
+        if not line or ":" not in line:
+            continue
+        name, rng = line.split(":", 1)
+        name = name.strip()
+        parts = [p.strip() for p in rng.split(",") if p.strip()]
+        if not name or len(parts) != 2:
+            raise ValueError(f"Band line must be 'name: low, high' -> {raw!r}")
+        try:
+            lo, hi = float(parts[0]), float(parts[1])
+        except ValueError:
+            raise ValueError(f"Band limits must be numbers -> {raw!r}")
+        spec[name] = [lo, hi]
+    return spec
+
+def write_project_state(cfg, output_path, n_files, emit):
+    """Write the run's parameters to a project_state .txt file for reproducibility."""
+    state_path = output_path + "_project_state.txt"
+    try:
+        with open(state_path, "w", encoding="utf-8") as f:
+            f.write("EEG Complexity Pipeline — Project State\n")
+            f.write("=" * 50 + "\n")
+            f.write(f"Run started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Files queued: {n_files}\n")
+            f.write("=" * 50 + "\n\n")
+            for key, value in cfg.items():
+                f.write(f"{key}: {value}\n")
+        emit(f"  Saved project state: {state_path}")
+    except Exception as e:  # noqa: BLE001
+        emit(f"  ⚠ Could not write project state: {e}")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # UI
 # ─────────────────────────────────────────────────────────────────────────────
@@ -166,7 +201,7 @@ app_ui = ui.page_sidebar(
             ),
             ui.accordion_panel(
                 "Pipelines to Run",
-                ui.input_checkbox("run_lz", "LZ78", True),
+                ui.input_checkbox("run_lz", "LZC", True),
                 ui.input_checkbox("run_pe", "Permutation Entropy", True),
                 ui.input_checkbox("run_wsmi", "wSMI", True),
                 ui.input_checkbox("run_psd", "PSD", False),
@@ -227,6 +262,11 @@ app_ui = ui.page_sidebar(
                     {"fooof_peaks": "FOOOF Peaks", "psd_integration": "PSD Integration",
                      "aap": "Aperiodic-Adjusted Power"},
                     selected=["fooof_peaks"],
+                ),
+                ui.input_text_area(
+                    "psd_bands", "Frequency bands (one per line: name: low, high)",
+                    "Delta: 1, 4\nTheta: 4, 8\nAlpha: 8, 13\nBeta: 13, 30\nGamma: 30, 48",
+                    rows=5,
                 ),
                 ui.input_checkbox("psd_normalize_total_power", "Normalize total power? (Doesn't apply to AAP)", True),
                 ui.panel_conditional(
@@ -538,6 +578,7 @@ def server(input, output, session):
                 "wsmi_bypass_csd": input.wsmi_bypass_csd(),
                 "psd_levels": list(input.psd_levels()),
                 "psd_methods": list(input.psd_methods()),
+                "psd_freq_bands": parse_band_spec(input.psd_bands()) if input.run_psd() else None,
                 "psd_normalize_total_power": input.psd_normalize_total_power(),
                 "psd_region_spec": parse_region_spec(input.psd_regions()) if "region" in input.psd_levels() else None,
             }
@@ -666,6 +707,8 @@ def run_pipeline(cfg, set_files, emit, stop_flag, report_progress):
         condition_names = [resting_label]
 
     try:
+        write_project_state(cfg, output_path, len(set_files), emit)
+
         for idx, file_path in enumerate(set_files):
 
             if stop_flag["stop"]:
@@ -760,10 +803,10 @@ def run_pipeline(cfg, set_files, emit, stop_flag, report_progress):
                             df["metric"] = "LZ"
                             all_lz.append(df)
                         tracker["lz_status"] = "success"
-                        emit("     LZ78 ✓")
+                        emit("     LZC ✓")
                     else:
                         tracker["lz_status"] = "failed"
-                        emit("     LZ78 returned None")
+                        emit("     LZC returned None")
                 except Exception as e:  # noqa: BLE001
                     tracker["lz_status"] = "error"
                     tracker["error_details"] = f"LZ: {traceback.format_exc()}"
@@ -853,6 +896,7 @@ def run_pipeline(cfg, set_files, emit, stop_flag, report_progress):
                         band_power_methods=cfg["psd_methods"],
                         normalize_total_power=cfg["psd_normalize_total_power"],
                         region_spec=cfg["psd_region_spec"],
+                        freq_bands=cfg["psd_freq_bands"],
                         plot_fooof=False,
                         condition_spec=condition_spec,
                     )
