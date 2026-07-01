@@ -89,6 +89,7 @@ def process_psd(processed_set_path,
                 spatial_levels=('channel',),
                 band_power_methods=('fooof_peaks',),
                 normalize_total_power=True, region_spec=None,
+                freq_bands=None,
                 plot_fooof=False, plot_channel=None, plots_dir=None, ppt_id=None,
                 condition_spec=None):
     """
@@ -136,13 +137,14 @@ def process_psd(processed_set_path,
         return None
 
     # Define frequency bands
-    freq_bands = {
-        'Delta': [1, 4],
-        'Theta': [4, 8],
-        'Alpha': [8, 13],
-        'Beta':  [13, 30],
-        'Gamma': [30, 48]
-    }
+    if freq_bands is None:
+        freq_bands = {
+            'Delta': [1, 4],
+            'Theta': [4, 8],
+            'Alpha': [8, 13],
+            'Beta': [13, 30],
+            'Gamma': [30, 48]
+        }
 
     # Regions come from GUI (region_spec) rather than being hardcoded
     regions = region_spec if region_spec else {}
