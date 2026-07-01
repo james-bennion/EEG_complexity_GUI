@@ -1,4 +1,5 @@
-# complexity_shiny
+# EEG Complexity GUI
+
 A repository containing pipelines for calculating some complexity measures from EEG data and a GUI for easy use. The measures included are Lempel-Ziv Complexity, Permutation Entropy, weighted Symbolic Mutual Information, and aspects of the power spectrum including FOOOF.
 
 The easiest way to use the package is to go to "Releases" and download the latest release (Windows/Mac depending on your system) as a zip.
