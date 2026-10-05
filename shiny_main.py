@@ -146,6 +146,19 @@ def parse_band_spec(text):
         spec[name] = [lo, hi]
     return spec
 
+def parse_freq_range(text, label="FOOOF fit range"):
+    """'1, 48' -> [1.0, 48.0]."""
+    parts = [p.strip() for p in str(text).split(",") if p.strip()]
+    if len(parts) != 2:
+        raise ValueError(f"{label} must be 'low, high' -> {text!r}")
+    try:
+        lo, hi = float(parts[0]), float(parts[1])
+    except ValueError:
+        raise ValueError(f"{label} limits must be numbers -> {text!r}")
+    if not 0 < lo < hi:
+        raise ValueError(f"{label} must satisfy 0 < low < high -> {text!r}")
+    return [lo, hi]
+
 def write_project_state(cfg, output_path, n_files, emit):
     """Write the run's parameters to a project_state .txt file for reproducibility."""
     state_path = output_path + "_project_state.txt"
@@ -268,7 +281,18 @@ app_ui = ui.page_sidebar(
                     "Delta: 1, 4\nTheta: 4, 8\nAlpha: 8, 13\nBeta: 13, 30\nGamma: 30, 48",
                     rows=5,
                 ),
-                ui.input_checkbox("psd_normalize_total_power", "Normalize total power? (Doesn't apply to AAP)", True),
+                ui.input_text("psd_fooof_range", "FOOOF fit range in Hz (low, high)", "1, 48"),
+                ui.input_select(
+                    "psd_aperiodic_mode", "FOOOF aperiodic mode",
+                    {"fixed": "Fixed (straight line)", "knee": "Knee (allows a bend; wide ranges)"},
+                    selected="fixed",
+                ),
+                ui.input_text("psd_peak_width_limits", "FOOOF peak width limits in Hz (low, high)", "2, 6"),
+                ui.input_numeric("psd_max_n_peaks", "FOOOF max number of peaks", 6, min=1, step=1),
+                ui.input_numeric("psd_min_peak_height", "FOOOF min peak height (log10 power)", 0.1, min=0, step=0.05),
+                ui.input_numeric("psd_peak_threshold", "FOOOF peak threshold (SDs above noise)", 2.0, min=0, step=0.5),
+                ui.input_checkbox("psd_normalize_psd_integration", "Normalize PSD integration total power?", True),
+                ui.input_checkbox("psd_normalize_fooof_peaks", "Normalize FOOOF peaks total power?", True),
                 ui.panel_conditional(
                     "input.psd_levels.includes('region')",
                     ui.input_text_area(
@@ -481,8 +505,9 @@ def server(input, output, session):
               - *Aperiodic-Adjusted Power (AAP)* — rather than fitting peaks, just subtracts the FOOOF
                 fit from the overall power spectrum, isolating oscilatory activity.
                  
-            - **Normalise Total Power** — divides each band power value by total power across
-              the spectrum, giving a value between 0 and 1. This doesn't apply to AAP as this 
+            - **Normalise Total Power** — set separately for PSD Integration and FOOOF Peaks.
+              Divides each band power value by total power (sum of all bands for PSD Integration,
+              sum of all fitted peak heights for FOOOF Peaks), giving a value between 0 and 1. This doesn't apply to AAP as this 
               is already normalised by the subtraction in log space (equivalent to division).
             """),
             title="EEG Complexity Pipeline App - User Guide",
@@ -555,7 +580,7 @@ def server(input, output, session):
             emit(f"✗ Bad condition definition: {e}")
             return
 
-        # Snapshot all parameters NOW (can't read inputs from the worker thread)
+        # Snapshot all parameters now (can't read inputs from the worker thread)
         try:
             cfg = {
                 "input_path": input.input_path().strip().strip('"').strip("'"),
@@ -579,7 +604,14 @@ def server(input, output, session):
                 "psd_levels": list(input.psd_levels()),
                 "psd_methods": list(input.psd_methods()),
                 "psd_freq_bands": parse_band_spec(input.psd_bands()) if input.run_psd() else None,
-                "psd_normalize_total_power": input.psd_normalize_total_power(),
+                "psd_fooof_range": parse_freq_range(input.psd_fooof_range()) if input.run_psd() else None,
+                "psd_aperiodic_mode": input.psd_aperiodic_mode(),
+                "psd_peak_width_limits": parse_freq_range(input.psd_peak_width_limits(), "FOOOF peak width limits") if input.run_psd() else None,
+                "psd_max_n_peaks": int(input.psd_max_n_peaks()),
+                "psd_min_peak_height": float(input.psd_min_peak_height()),
+                "psd_peak_threshold": float(input.psd_peak_threshold()),
+                "psd_normalize_psd_integration": input.psd_normalize_psd_integration(),
+                "psd_normalize_fooof_peaks": input.psd_normalize_fooof_peaks(),
                 "psd_region_spec": parse_region_spec(input.psd_regions()) if "region" in input.psd_levels() else None,
             }
         except ValueError as e:
@@ -894,9 +926,16 @@ def run_pipeline(cfg, set_files, emit, stop_flag, report_progress):
                         processed_set_path=file_path,
                         spatial_levels=cfg["psd_levels"],
                         band_power_methods=cfg["psd_methods"],
-                        normalize_total_power=cfg["psd_normalize_total_power"],
+                        normalize_psd_integration=cfg["psd_normalize_psd_integration"],
+                        normalize_fooof_peaks=cfg["psd_normalize_fooof_peaks"],
                         region_spec=cfg["psd_region_spec"],
                         freq_bands=cfg["psd_freq_bands"],
+                        fooof_freq_range=cfg["psd_fooof_range"],
+                        aperiodic_mode=cfg["psd_aperiodic_mode"],
+                        peak_width_limits=cfg["psd_peak_width_limits"],
+                        max_n_peaks=cfg["psd_max_n_peaks"],
+                        min_peak_height=cfg["psd_min_peak_height"],
+                        peak_threshold=cfg["psd_peak_threshold"],
                         plot_fooof=False,
                         condition_spec=condition_spec,
                     )
